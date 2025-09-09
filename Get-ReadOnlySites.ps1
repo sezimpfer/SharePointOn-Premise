@@ -5,7 +5,9 @@
 .DESCRIPTION
     This script retrieves all site collections and webs in the SharePoint 2016 farm
     that have ReadOnly status enabled. It provides detailed information about each
-    ReadOnly site including URL, title, and lock status.
+    ReadOnly site including URL, title, and lock status. The script also provides
+    comprehensive summaries for each web application showing ReadOnly, No Access,
+    and Not Locked site counts with percentages.
 
 .PARAMETER WebApplicationUrl
     Optional. Specify a specific web application URL to limit the scope.
@@ -43,6 +45,7 @@ param(
 # Initialize variables
 $ErrorActionPreference = "Stop"
 $ReadOnlySites = @()
+$WebAppSummary = @()
 $ScriptStartTime = Get-Date
 
 try {
@@ -86,6 +89,12 @@ try {
     foreach ($WebApp in $WebApplications) {
         Write-Host "Processing Web Application: $($WebApp.Url)" -ForegroundColor Cyan
         
+        # Initialize counters for this web application
+        $ReadOnlyCount = 0
+        $NoAccessCount = 0
+        $NotLockedCount = 0
+        $TotalSitesCount = 0
+        
         # Get all site collections in the web application
         $SiteCollections = Get-SPSite -WebApplication $WebApp -Limit All -ErrorAction Continue
         Write-Host "  Found $($SiteCollections.Count) site collection(s)" -ForegroundColor Gray
@@ -93,9 +102,12 @@ try {
         # Check each site collection
         foreach ($SiteCollection in $SiteCollections) {
             try {
+                $TotalSitesCount++
+                
                 # Check if site collection is ReadOnly
                 if ($SiteCollection.ReadOnly -eq $true) {
                     Write-Host "  Found ReadOnly Site Collection: $($SiteCollection.Url)" -ForegroundColor Red
+                    $ReadOnlyCount++
                     
                     $SiteInfo = New-Object PSObject -Property @{
                         Type = "Site Collection"
@@ -106,70 +118,155 @@ try {
                         Owner = $SiteCollection.Owner.LoginName
                         LastModified = $SiteCollection.LastContentModifiedDate
                         WebApplication = $WebApp.Url
+                        Status = "ReadOnly"
                     }
                     $ReadOnlySites += $SiteInfo
+                } else {
+                    # Site collection is not ReadOnly
+                    $NotLockedCount++
                 }
 
                 # Check all webs within the site collection
-                $Webs = Get-SPWeb -Site $SiteCollection -Limit All -ErrorAction Continue
-                foreach ($Web in $Webs) {
-                    try {
-                        # Check if web is ReadOnly
-                        if ($Web.ReadOnlyUI -eq $true -or $Web.AllowUnsafeUpdates -eq $false) {
-                            Write-Host "    Found ReadOnly Web: $($Web.Url)" -ForegroundColor Yellow
+                try {
+                    $Webs = Get-SPWeb -Site $SiteCollection -Limit All -ErrorAction Stop
+                    foreach ($Web in $Webs) {
+                        try {
+                            $TotalSitesCount++
                             
-                            $WebInfo = New-Object PSObject -Property @{
-                                Type = "Web"
-                                Url = $Web.Url
-                                Title = $Web.Title
-                                ReadOnly = $Web.ReadOnlyUI
-                                AllowUnsafeUpdates = $Web.AllowUnsafeUpdates
-                                LockIssue = "N/A"
-                                Owner = if($Web.HasUniqueRoleAssignments) { "Unique Permissions" } else { "Inherited" }
-                                LastModified = $Web.LastItemModifiedDate
-                                WebApplication = $WebApp.Url
+                            # Check if web is ReadOnly
+                            if ($Web.ReadOnlyUI -eq $true -or $Web.AllowUnsafeUpdates -eq $false) {
+                                Write-Host "    Found ReadOnly Web: $($Web.Url)" -ForegroundColor Yellow
+                                $ReadOnlyCount++
+                                
+                                $WebInfo = New-Object PSObject -Property @{
+                                    Type = "Web"
+                                    Url = $Web.Url
+                                    Title = $Web.Title
+                                    ReadOnly = $Web.ReadOnlyUI
+                                    AllowUnsafeUpdates = $Web.AllowUnsafeUpdates
+                                    LockIssue = "N/A"
+                                    Owner = if($Web.HasUniqueRoleAssignments) { "Unique Permissions" } else { "Inherited" }
+                                    LastModified = $Web.LastItemModifiedDate
+                                    WebApplication = $WebApp.Url
+                                    Status = "ReadOnly"
+                                }
+                                $ReadOnlySites += $WebInfo
+                            } else {
+                                # Web is not ReadOnly
+                                $NotLockedCount++
                             }
-                            $ReadOnlySites += $WebInfo
+                        }
+                        catch {
+                            Write-Warning "Error processing web $($Web.Url): $($_.Exception.Message)"
+                            $NoAccessCount++
+                        }
+                        finally {
+                            # Dispose web object to free memory
+                            if ($Web -ne $null) { $Web.Dispose() }
                         }
                     }
-                    catch {
-                        Write-Warning "Error processing web $($Web.Url): $($_.Exception.Message)"
-                    }
-                    finally {
-                        # Dispose web object to free memory
-                        if ($Web -ne $null) { $Web.Dispose() }
-                    }
+                }
+                catch {
+                    Write-Warning "Access denied getting webs for site collection $($SiteCollection.Url): $($_.Exception.Message)"
+                    $NoAccessCount++
                 }
             }
             catch {
                 Write-Warning "Error processing site collection $($SiteCollection.Url): $($_.Exception.Message)"
+                $NoAccessCount++
             }
             finally {
                 # Dispose site collection object to free memory
                 if ($SiteCollection -ne $null) { $SiteCollection.Dispose() }
             }
         }
+        
+        # Create summary for this web application
+        $WebAppSummaryItem = New-Object PSObject -Property @{
+            WebApplication = $WebApp.Url
+            TotalSites = $TotalSitesCount
+            ReadOnlySites = $ReadOnlyCount
+            NoAccessSites = $NoAccessCount
+            NotLockedSites = $NotLockedCount
+            ReadOnlyPercentage = if($TotalSitesCount -gt 0) { [math]::Round(($ReadOnlyCount / $TotalSitesCount) * 100, 2) } else { 0 }
+            NoAccessPercentage = if($TotalSitesCount -gt 0) { [math]::Round(($NoAccessCount / $TotalSitesCount) * 100, 2) } else { 0 }
+        }
+        $WebAppSummary += $WebAppSummaryItem
+        
+        # Display summary for this web application
+        Write-Host ""
+        Write-Host "  Web Application Summary:" -ForegroundColor Green
+        Write-Host "  ========================" -ForegroundColor Green
+        Write-Host "  Total Sites: $TotalSitesCount" -ForegroundColor White
+        Write-Host "  ReadOnly Sites: $ReadOnlyCount ($($WebAppSummaryItem.ReadOnlyPercentage)%)" -ForegroundColor Red
+        Write-Host "  No Access Sites: $NoAccessCount ($($WebAppSummaryItem.NoAccessPercentage)%)" -ForegroundColor Yellow
+        Write-Host "  Not Locked Sites: $NotLockedCount" -ForegroundColor Green
+        Write-Host ""
     }
 
     Write-Host ""
     Write-Host "ReadOnly Sites Discovery Complete!" -ForegroundColor Green
     Write-Host "Total ReadOnly sites found: $($ReadOnlySites.Count)" -ForegroundColor Green
 
-    # Display results
+    # Display Web Application Summary
+    Write-Host ""
+    Write-Host "===============================================" -ForegroundColor Cyan
+    Write-Host "          WEB APPLICATION SUMMARY" -ForegroundColor Cyan
+    Write-Host "===============================================" -ForegroundColor Cyan
+    
+    if ($WebAppSummary.Count -gt 0) {
+        $WebAppSummary | Format-Table -Property @{
+            Label="Web Application"; Expression={$_.WebApplication}; Width=40
+        }, @{
+            Label="Total Sites"; Expression={$_.TotalSites}; Width=12
+        }, @{
+            Label="ReadOnly"; Expression={"$($_.ReadOnlySites) ($($_.ReadOnlyPercentage)%)"}; Width=18
+        }, @{
+            Label="No Access"; Expression={"$($_.NoAccessSites) ($($_.NoAccessPercentage)%)"}; Width=18
+        }, @{
+            Label="Not Locked"; Expression={$_.NotLockedSites}; Width=12
+        } -AutoSize
+        
+        # Calculate farm totals
+        $TotalFarmSites = ($WebAppSummary | Measure-Object -Property TotalSites -Sum).Sum
+        $TotalReadOnlyFarm = ($WebAppSummary | Measure-Object -Property ReadOnlySites -Sum).Sum
+        $TotalNoAccessFarm = ($WebAppSummary | Measure-Object -Property NoAccessSites -Sum).Sum
+        $TotalNotLockedFarm = ($WebAppSummary | Measure-Object -Property NotLockedSites -Sum).Sum
+        
+        Write-Host ""
+        Write-Host "FARM TOTALS:" -ForegroundColor Magenta
+        Write-Host "============" -ForegroundColor Magenta
+        Write-Host "Total Sites in Farm: $TotalFarmSites" -ForegroundColor White
+        Write-Host "ReadOnly Sites: $TotalReadOnlyFarm ($([math]::Round(($TotalReadOnlyFarm / $TotalFarmSites) * 100, 2))%)" -ForegroundColor Red
+        Write-Host "No Access Sites: $TotalNoAccessFarm ($([math]::Round(($TotalNoAccessFarm / $TotalFarmSites) * 100, 2))%)" -ForegroundColor Yellow
+        Write-Host "Not Locked Sites: $TotalNotLockedFarm ($([math]::Round(($TotalNotLockedFarm / $TotalFarmSites) * 100, 2))%)" -ForegroundColor Green
+    }
+
+    # Display detailed results for ReadOnly sites
     if ($ReadOnlySites.Count -gt 0) {
         Write-Host ""
-        Write-Host "ReadOnly Sites Summary:" -ForegroundColor Cyan
-        Write-Host "========================" -ForegroundColor Cyan
+        Write-Host "===============================================" -ForegroundColor Cyan
+        Write-Host "        DETAILED READONLY SITES" -ForegroundColor Cyan
+        Write-Host "===============================================" -ForegroundColor Cyan
         
         $ReadOnlySites | Sort-Object Type, Url | Format-Table -Property Type, Url, Title, ReadOnly, LockIssue -AutoSize
         
         # Export to CSV if path specified
         if ($ExportPath) {
             Write-Host "Exporting results to: $ExportPath" -ForegroundColor Yellow
+            
+            # Export ReadOnly sites details
             $ReadOnlySites | Sort-Object Type, Url | Export-Csv -Path $ExportPath -NoTypeInformation -Force
-            Write-Host "Export completed successfully." -ForegroundColor Green
+            
+            # Export Web Application Summary to separate CSV
+            $SummaryPath = $ExportPath.Replace(".csv", "_Summary.csv")
+            $WebAppSummary | Export-Csv -Path $SummaryPath -NoTypeInformation -Force
+            
+            Write-Host "ReadOnly sites exported to: $ExportPath" -ForegroundColor Green
+            Write-Host "Summary exported to: $SummaryPath" -ForegroundColor Green
         }
     } else {
+        Write-Host ""
         Write-Host "No ReadOnly sites found in the farm." -ForegroundColor Green
     }
 
