@@ -188,6 +188,7 @@ finally {
     Write-Host "Start Time: $ScriptStartTime" -ForegroundColor Gray
     Write-Host "End Time: $ScriptEndTime" -ForegroundColor Gray
     Write-Host "Duration: $($Duration.ToString('hh\:mm\:ss'))" -ForegroundColor Gray
+    Write-Host "Web Applications Processed: $($WebAppSummary.Count)" -ForegroundColor Gray
     Write-Host "ReadOnly Sites Found: $($ReadOnlySites.Count)" -ForegroundColor Gray
     
     Write-Host ""
